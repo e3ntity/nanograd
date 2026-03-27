@@ -4,4 +4,7 @@
 .DS_Store
 
 # Custom
-graph.html
+data/mnist
+filter2d_graph.html
+mnist_model.html
+perceptron_graph.html

@@ -3,7 +3,7 @@
 //!
 //! The main entry-point is [`dump_graph`], which writes a fully self-contained
 //! HTML file that can be opened in any modern browser.
-use crate::Scalar;
+use crate::scalar::Scalar;
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
