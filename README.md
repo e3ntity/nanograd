@@ -2,6 +2,8 @@
 
 Minimal automatic-differentiation engine written in Rust.
 
+Everything is built from scratch, the only dependencies are `image` (for decoding PNGs) and `rand`.
+
 ## Quick start
 
 Pick an example to run:
