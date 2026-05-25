@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use crate::scalar::scalar::Node;
+
 use super::Scalar;
 use super::scalar::Edge;
 use super::scalar::Operation;
@@ -41,6 +45,16 @@ pub fn ln(x: Scalar) -> Scalar {
     out
 }
 
+pub fn exp(x: Scalar) -> Scalar {
+    let v = x.get_value();
+
+    let out = Scalar::new(v.exp());
+    let weight = v.exp();
+    out.set_edge(Edge::new(vec![(x.clone().into(), weight)], Operation::Exp));
+
+    out
+}
+
 pub fn sqrt(x: Scalar) -> Scalar {
     let v = x.get_value();
 
@@ -79,6 +93,25 @@ pub fn relu(x: Scalar) -> Scalar {
     let out = Scalar::new(value);
     let weight = if value > 0. { 1. } else { 0. };
     out.set_edge(Edge::new(vec![(x.clone().into(), weight)], Operation::Relu));
+
+    out
+}
+
+pub fn softmax<const N: usize>(x: [Scalar; N]) -> [Scalar; N] {
+    let v: [f32; N] = std::array::from_fn(|i| x[i].get_value());
+    let norm: f32 = v.iter().map(|v| v.exp()).sum();
+
+    let out = std::array::from_fn(|i| Scalar::new(v[i].exp() / norm));
+    for i in 0..N {
+        let mut edges: Vec<(Arc<Node>, f32)> = vec![];
+        for k in 0..N {
+            let kd = if i == k { 1.0 } else { 0.0 };
+            let weight = out[i].get_value() * (kd - out[k].get_value());
+            edges.push((x[k].clone().into(), weight));
+        }
+
+        out[i].set_edge(Edge::new(edges, Operation::Softmax));
+    }
 
     out
 }

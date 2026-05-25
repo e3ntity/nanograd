@@ -7,20 +7,26 @@
 //! accumulates gradients on every node that was created with gradient tracking
 //! enabled.
 use std::{
+    collections::HashSet,
     ops,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[derive(Debug)]
 pub(super) enum Operation {
     Abs,
     Add,
+    Exp,
     Ln,
     Max,
     Mul,
     Neg,
     Relu,
     Sigmoid,
+    Softmax,
     Sqrt,
     Sub,
 }
@@ -47,6 +53,7 @@ impl Edge {
 /// that several `Scalar`s can point to the same allocation.
 #[derive(Debug)]
 pub(super) struct Node {
+    pub(super) id: u64,
     pub(super) edge: Arc<Mutex<Option<Edge>>>,
     pub(super) grad: Mutex<Option<f32>>,
     pub(super) value: Mutex<f32>,
@@ -59,6 +66,8 @@ pub(super) struct Node {
 /// the scalar should accumulate gradients (i.e. is a *leaf* in the graph).
 #[derive(Clone, Debug)]
 pub struct Scalar(Arc<Node>);
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 impl Scalar {
     /// Construct a scalar that does **not** accumulate gradients.
@@ -74,6 +83,7 @@ impl Scalar {
 
     fn new_(value: f32, grad: Option<f32>) -> Self {
         Scalar(Arc::new(Node {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             edge: Arc::new(Mutex::new(None)),
             grad: Mutex::new(grad),
             value: Mutex::new(value),
@@ -82,30 +92,100 @@ impl Scalar {
 
     /// Entry-point for reverse-mode AD.  Starts a backward pass with
     /// the seed gradient `1.0`.
+    // pub fn backward(&self) {
+    //     if self.0.grad.lock().unwrap().is_none() {
+    //         panic!("Cannot call backward on Scalar without gradient enabled");
+    //     }
+    //
+    //     self.backward_(1.);
+    // }
+
+    /// Same as [`Scalar::backward`] but allows passing an explicit seed value.
+    // pub fn backward_(&self, val: f32) {
+    //     self.set_grad(self.get_grad().unwrap() + val);
+    //
+    //     let lock = self.0.edge.lock().unwrap();
+    //     let Some(edge) = &*lock else {
+    //         return;
+    //     };
+    //
+    //     for (child, weight) in edge.operands.iter() {
+    //         let child_scalar = Scalar(child.clone());
+    //         if child_scalar.has_grad() {
+    //             child_scalar.backward_(val * weight);
+    //         }
+    //     }
+    // }
+
+    /// Propagates gradient through the scalar chain of operations.
     pub fn backward(&self) {
         if self.0.grad.lock().unwrap().is_none() {
             panic!("Cannot call backward on Scalar without gradient enabled");
         }
 
-        self.backward_(1.);
-    }
+        self.set_grad(1.0);
 
-    /// Same as [`Scalar::backward`] but allows passing an explicit seed value.
-    pub fn backward_(&self, val: f32) {
-        self.set_grad(self.get_grad().unwrap() + val);
+        let nodes = Scalar::depth_first_search_post(&self.0);
+        for node in nodes.iter().rev() {
+            let scalar = Scalar(Arc::clone(node));
+            if !scalar.has_grad() {
+                continue;
+            }
 
-        let clone = Arc::clone(&self.0.edge);
-        let lock = clone.lock().unwrap();
-        let Some(edge) = &*lock else {
-            return;
-        };
+            let lock = scalar.0.edge.lock().unwrap();
+            let Some(edge) = &*lock else {
+                continue;
+            };
 
-        for (child, weight) in edge.operands.iter() {
-            let child_scalar = Scalar(child.clone());
-            if child_scalar.has_grad() {
-                child_scalar.backward_(val * weight);
+            for (child, weight) in edge.operands.iter() {
+                let child_scalar = Scalar(child.clone());
+                if !child_scalar.has_grad() {
+                    continue;
+                }
+
+                let grad = child_scalar.get_grad().unwrap() + weight * scalar.get_grad().unwrap();
+                child_scalar.set_grad(grad);
             }
         }
+
+        for node in nodes {
+            // Clear nodes to prevent rust's recusive destructor from blowing up the stack
+            *node.edge.lock().unwrap() = None;
+        }
+    }
+
+    fn depth_first_search_post(node: &Arc<Node>) -> Vec<Arc<Node>> {
+        let mut nodes = vec![];
+        let mut visited = HashSet::<u64>::new();
+
+        let mut path = vec![node.clone()];
+        while path.len() > 0 {
+            let current_node = Arc::clone(&path[path.len() - 1]);
+            visited.insert(current_node.id);
+
+            let unvisited_children: Vec<Arc<Node>> = {
+                let lock = current_node.edge.lock().unwrap();
+                match &*lock {
+                    Some(edge) => edge
+                        .operands
+                        .iter()
+                        .map(|(c, _)| Arc::clone(c))
+                        .filter(|c| Scalar(Arc::clone(c)).has_grad() && !visited.contains(&c.id))
+                        .collect(),
+                    None => vec![],
+                }
+            };
+
+            if unvisited_children.len() > 0 {
+                path.push(Arc::clone(&unvisited_children[0]));
+                continue;
+            }
+
+            path.pop();
+            nodes.push(current_node);
+        }
+
+        nodes
     }
 
     /// Returns `true` if a gradient buffer is allocated for this scalar.
@@ -178,12 +258,14 @@ impl Scalar {
 
         match edge.operation {
             Operation::Add => "Add".to_owned(),
+            Operation::Exp => "Exp".to_owned(),
             Operation::Ln => "Ln".to_owned(),
             Operation::Max => "Max".to_owned(),
             Operation::Mul => "Mul".to_owned(),
             Operation::Neg => "Neg".to_owned(),
             Operation::Relu => "ReLU".to_owned(),
             Operation::Sigmoid => "Sigmoid".to_owned(),
+            Operation::Softmax => "Softmax".to_owned(),
             Operation::Sqrt => "Sqrt".to_owned(),
             Operation::Sub => "Sub".to_owned(),
             Operation::Abs => "Abs".to_owned(),
