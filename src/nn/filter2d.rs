@@ -1,6 +1,6 @@
 use super::module::Module;
 use super::perceptron::Perceptron;
-use crate::scalar::Scalar;
+use crate::scalar::{Scalar, func};
 use crate::util::dist::rand_normal;
 
 #[derive(Clone, Debug)]
@@ -56,4 +56,36 @@ impl<const C: usize, const K: usize> Module for Filter2d<C, K> {
 
         params
     }
+}
+
+pub fn max_pool_2d(x: Vec<Vec<Scalar>>, kernel: usize, stride: usize) -> Vec<Vec<Scalar>> {
+    let h_out = (x.len() - kernel) / stride + 1;
+    let w_out = (x[0].len() - kernel) / stride + 1;
+
+    let mut out: Vec<Vec<Scalar>> = vec![];
+    out.reserve(h_out);
+
+    for h in 0..h_out {
+        let mut col: Vec<Scalar> = vec![];
+        col.reserve(w_out);
+
+        for w in 0..w_out {
+            let mut val = Scalar::new(0.0);
+
+            for dy in 0..kernel {
+                for dx in 0..kernel {
+                    let y_ = h * stride + dy;
+                    let x_ = w * stride + dx;
+
+                    val = func::max(val, x[y_][x_].clone());
+                }
+            }
+
+            col.push(val)
+        }
+
+        out.push(col);
+    }
+
+    out
 }

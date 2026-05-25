@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nanograd · MNIST</title>
+<style>
+  :root {
+    --bg: #0e0f12;
+    --fg: #e6e8ee;
+    --muted: #8a8f9b;
+    --accent: #6ee7b7;
+    --bar: #2a2d35;
+    --border: #1f222a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    height: 100%;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 24px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 32px;
+    align-items: start;
+  }
+  h1 {
+    grid-column: 1 / -1;
+    margin: 0 0 8px;
+    font-size: 18px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+  }
+  .pad {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  canvas.draw {
+    width: 280px;
+    height: 280px;
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    touch-action: none;
+    cursor: crosshair;
+    display: block;
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+  }
+  button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { border-color: #2e323d; }
+  .result {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+  .guess {
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .guess strong {
+    display: block;
+    font-size: 72px;
+    line-height: 1;
+    color: var(--fg);
+    font-weight: 500;
+    margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .bars {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 4px 10px;
+    align-items: center;
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+  }
+  .bars .lbl { color: var(--muted); width: 1ch; }
+  .bars .track {
+    height: 6px;
+    background: var(--bar);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .bars .fill {
+    height: 100%;
+    background: var(--muted);
+    width: 0%;
+    transition: width 90ms linear;
+  }
+  .bars .row.best .fill { background: var(--accent); }
+  .bars .row.best .lbl,
+  .bars .row.best .val { color: var(--fg); }
+  .bars .val { color: var(--muted); font-size: 12px; min-width: 4ch; text-align: right; }
+  .status {
+    font-size: 12px;
+    color: var(--muted);
+    min-height: 1em;
+  }
+  @media (max-width: 600px) {
+    main { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>nanograd · mnist</h1>
+  <div class="pad">
+    <canvas class="draw" id="pad" width="280" height="280"></canvas>
+    <div class="controls">
+      <button id="clear">Clear</button>
+    </div>
+  </div>
+  <div class="result">
+    <div class="guess">Best guess<strong id="best">—</strong></div>
+    <div class="bars" id="bars"></div>
+    <div class="status" id="status">Draw a digit</div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const pad = document.getElementById('pad');
+  const ctx = pad.getContext('2d');
+  const clearBtn = document.getElementById('clear');
+  const bestEl = document.getElementById('best');
+  const barsEl = document.getElementById('bars');
+  const statusEl = document.getElementById('status');
+
+  const off = document.createElement('canvas');
+  off.width = 28;
+  off.height = 28;
+  const offCtx = off.getContext('2d');
+
+  function resetCanvas() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, pad.width, pad.height);
+    ctx.strokeStyle = '#fff';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 22;
+  }
+  resetCanvas();
+
+  const rows = [];
+  for (let i = 0; i < 10; i++) {
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl';
+    lbl.textContent = i;
+    const track = document.createElement('div');
+    track.className = 'track';
+    const fill = document.createElement('div');
+    fill.className = 'fill';
+    track.appendChild(fill);
+    const val = document.createElement('div');
+    val.className = 'val';
+    val.textContent = '0%';
+    const row = document.createElement('div');
+    row.style.display = 'contents';
+    row.className = 'row';
+    row.append(lbl, track, val);
+    barsEl.appendChild(row);
+    rows.push({ row, fill, val });
+  }
+
+  let drawing = false;
+  let last = null;
+  let dirty = false;
+
+  function posOf(e) {
+    const r = pad.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) * (pad.width / r.width),
+      y: (e.clientY - r.top) * (pad.height / r.height),
+    };
+  }
+
+  pad.addEventListener('pointerdown', (e) => {
+    drawing = true;
+    pad.setPointerCapture(e.pointerId);
+    last = posOf(e);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(last.x + 0.01, last.y + 0.01);
+    ctx.stroke();
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (!drawing) return;
+    const p = posOf(e);
+    ctx.beginPath();
+    ctx.moveTo(last.x, last.y);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    last = p;
+  });
+  function endStroke(e) {
+    if (!drawing) return;
+    drawing = false;
+    try { pad.releasePointerCapture(e.pointerId); } catch {}
+    dirty = true;
+    schedulePredict();
+  }
+  pad.addEventListener('pointerup', endStroke);
+  pad.addEventListener('pointercancel', endStroke);
+  pad.addEventListener('pointerleave', (e) => {
+    if (drawing) endStroke(e);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    resetCanvas();
+    dirty = true;
+    bestEl.textContent = '—';
+    for (const { row, fill, val } of rows) {
+      row.classList.remove('best');
+      fill.style.width = '0%';
+      val.textContent = '0%';
+    }
+    statusEl.textContent = 'Draw a digit';
+    schedulePredict();
+  });
+
+  let timer = null;
+  let inflight = false;
+  let pending = false;
+
+  function schedulePredict() {
+    clearTimeout(timer);
+    timer = setTimeout(predict, 80);
+  }
+
+  function rasterize() {
+    offCtx.fillStyle = '#000';
+    offCtx.fillRect(0, 0, 28, 28);
+
+    const W = pad.width, H = pad.height;
+    const src = ctx.getImageData(0, 0, W, H).data;
+    let minX = W, minY = H, maxX = -1, maxY = -1;
+    let sumI = 0, sumIx = 0, sumIy = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const v = src[(y * W + x) * 4];
+        if (v < 8) continue;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+        sumI += v;
+        sumIx += v * x;
+        sumIy += v * y;
+      }
+    }
+    if (maxX < 0) return;
+
+    const bw = maxX - minX + 1, bh = maxY - minY + 1;
+    const scale = 20 / Math.max(bw, bh);
+    const cx = sumIx / sumI, cy = sumIy / sumI;
+    const dx = 14 - (cx - minX) * scale;
+    const dy = 14 - (cy - minY) * scale;
+
+    offCtx.imageSmoothingEnabled = true;
+    offCtx.imageSmoothingQuality = 'high';
+    offCtx.drawImage(pad, minX, minY, bw, bh, dx, dy, bw * scale, bh * scale);
+  }
+
+  async function predict() {
+    if (inflight) { pending = true; return; }
+    inflight = true;
+    statusEl.textContent = 'Predicting…';
+
+    rasterize();
+
+    const blob = await new Promise((res) => off.toBlob(res, 'image/jpeg', 0.92));
+    try {
+      const r = await fetch('/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'image/jpeg' },
+        body: blob,
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      render(data.predictions);
+      statusEl.textContent = 'Ready';
+    } catch (err) {
+      statusEl.textContent = 'Error: ' + err.message;
+    } finally {
+      inflight = false;
+      if (pending) { pending = false; schedulePredict(); }
+    }
+  }
+
+  function render(preds) {
+    let best = 0;
+    for (let i = 1; i < preds.length; i++) if (preds[i] > preds[best]) best = i;
+    bestEl.textContent = best;
+    for (let i = 0; i < rows.length; i++) {
+      const p = preds[i] ?? 0;
+      const pct = Math.max(0, Math.min(1, p));
+      rows[i].fill.style.width = (pct * 100).toFixed(1) + '%';
+      rows[i].val.textContent = (pct * 100).toFixed(1) + '%';
+      rows[i].row.classList.toggle('best', i === best);
+    }
+  }
+})();
+</script>
+</body>
+</html>
