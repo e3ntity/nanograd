@@ -1,6 +1,10 @@
 use crate::{
-    nn::{filter2d::Filter2d, module::Module},
+    nn::{
+        filter2d::{self, Filter2d},
+        module::Module,
+    },
     scalar::Scalar,
+    util::dist::rand_normal,
 };
 
 #[derive(Clone, Debug)]
@@ -12,7 +16,12 @@ impl<const CI: usize, const CO: usize, const K: usize> Conv2d<CI, CO, K> {
     pub fn new() -> Conv2d<CI, CO, K> {
         let filters = std::array::from_fn(|_| Filter2d::new());
 
-        Conv2d { filters }
+        let conv = Conv2d { filters };
+        for param in conv.params() {
+            param.set_value(rand_normal() as f32 * 1.0 / ((CI * K * K) as f32).sqrt());
+        }
+
+        conv
     }
 
     pub fn forward(&self, x: [Vec<Vec<Scalar>>; CI]) -> [Vec<Vec<Scalar>>; CO] {
@@ -29,4 +38,12 @@ impl<const CI: usize, const CO: usize, const K: usize> Module for Conv2d<CI, CO,
 
         params
     }
+}
+
+pub fn max_pool_2d<const C: usize>(
+    x: [Vec<Vec<Scalar>>; C],
+    kernel: usize,
+    stride: usize,
+) -> [Vec<Vec<Scalar>>; C] {
+    std::array::from_fn(|i| filter2d::max_pool_2d(x[i].clone(), kernel, stride))
 }

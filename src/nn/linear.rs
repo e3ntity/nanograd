@@ -1,6 +1,7 @@
 use super::module::Module;
 use super::perceptron::Perceptron;
 use crate::scalar::Scalar;
+use crate::util::dist::rand_normal;
 
 #[derive(Clone, Debug)]
 pub struct Linear<const I: usize, const O: usize> {
@@ -10,7 +11,13 @@ pub struct Linear<const I: usize, const O: usize> {
 impl<const I: usize, const O: usize> Linear<I, O> {
     pub fn new() -> Self {
         let perceptrons = std::array::from_fn(|_| Perceptron::new());
-        Linear { perceptrons }
+        let ffw = Linear { perceptrons };
+
+        for param in ffw.params() {
+            param.set_value(rand_normal() as f32 * 1.0 / (I as f32).sqrt());
+        }
+
+        ffw
     }
 
     pub fn forward(&self, x: [Scalar; I]) -> [Scalar; O] {
